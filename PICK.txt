@@ -1,0 +1,133 @@
+PICK:
+
+1. Train file:
+
+Before all this, main function accepts some arguments through parser and logger is set up
+
+needed to train: training dataset folder structure + validation dataset folder structure (paths to them in config)
+
+- train dataset is loaded by a config object which uses the arguments to infer way then loaded in a data loader for batches ('train_dataset' passed to config obj)
+- validation dataset is loaded same way then in a validation loader('validation_dataset' passed to config obj)
+- model is built using 'model_arch' arg passed to config
+- optimizer+scheduler for lr is set alongside loader
+- Trainer object is created passing validation dataset loader and training dataset loader
+- trainer calls .train
+Trainer object:
+- sets up GPU if available
+- loads parametars through config
+- a result dictionary is formed containing validation losses (graph learning loss(scaled by lambda) + crf loss) and a validation result is reported as SpanBasedF1MetricTracker.dict2str(val_result_dict)
+- the best model is saved (best epoch results)
+
+
+2. Test file:
+
+In main function, pass the path to boxes and transcripts folder for test, path to the images folder for test, and path for the output folder containing predictions for labels. Also define batch size and GPU id to use.
+This isn't set in config, rather by an argument parser
+
+needed to test: path to boxes and transcripts folder for test, path to images folder for test
+
+A pick dataset object is created passing training=False which prepares needed structure. Entities are written in format {item['entity_name']:item['text']} where item is an entity
+
+3. Parse config.py defines the ConfigParser class which is responsible for converting config.json file to hyperparameter values and model architecture
+
+4. Dist_train.sh defines a way to train the model from console (bash)
+
+5. Config.json defines parameters/hyperparameters and various setups:
+	- distributed = true: 
+	- model architecture: specifies embedding arguments; parameters for the encoder(for images and texts) 	= 3 layers 512 encodding dim for text and 1024 ff neurons ; graph learning process parameters (2 layers, -1,128 dim) ; decoder parameters(bilstm: 512 neurons, 2 layers with bidirectional and dropout; mlp; crf args); 
+	- train dataset info: path to train_samples_list.csv; path to boxes and transcripts folder; path to images and entities folders; iob tagging style; image new dimensions in the preprocessing
+	- validation dataset info: identical to train dataset_info
+	- train dataset loader (4 batch size + shuffle)
+	- validation dataset loader (4 batch size and no shuffle)
+	- optimizer (Adam lr=0.0001)
+	- lr scheduler (StepLR, 30 step size, gamma=0.1)
+	- trainer arguments (100 epochs, gl lambda=0.01 (according to paper), 40 early stop)
+
+6. MODEL:
+
+6.1 Encoder:
+
+constructor:
+- primary function: convert image segments and text segments to node embedding.
+- arguments: the character embedding dimension (from config), output_dimension(config), image_feature_dimension(from res_net=512), 6 layers, 2048 neurons each, pooling size:(7,7) for resnet, dropout=0.1)
+
+- transformer encoder layer is created (as in paper - accepts char emb dim, feedforward dim,)
+- transformer encoder (which accepts nlayers transformer encoder layers)
+THIS IS USED FOR FINAL ENCODING OF TEXT_EMBEDDINGS+IMAGE_EMBEDINGS
+
+- sets up image encoder according to version of resnet (if resnet version is not passed, error is thrown) - this is the cnn for image feature generation
+- a convolutional layer is passed with pooling options from config, batch normalization layer then passed to FC layer (projection of 2*out_dim input neurons) 
+THIS IS FOR IMAGES
+
+- creates position embeddings for each segment(char) according to some formula
+- dropout layer
+
+forward:
+- accepts :
+	images as tensor: whole_images, shape is (B, N, H, W, C), where B is batch size, N is the number of segments of the documents, H is height of image, W is width of image, C is channel of images (default is 3).
+	coordinates of boxes as tensor:  boxes coordinate, shape is (B, N, 8), where 8 is coordinates (x1, y1, x2, y2, x3, y3, x4, y4).
+	transcripts as tensor: which are the text segments, shape is (B, N, T, D), where T is the max length of transcripts, D is dimension of model.
+
+
+RETURNS set of nodes X, shape is (B*N, T, D) (batch_num * number of segments in documents * max len of transcripts * dimension of model)
+- first image embeddings are created using pretrained cnn
+- image segments are retrieved by generating ROIS
+- transcripts are combiend with position embeddings
+- transcript segment embeddings and image segment embeddings are added then passed to the transformer encoder
+
+6.2. GLCN
+
+constructor:
+- primary function:  perform graph learning and multi-time graph convolution operation
+- accepts: in_dim, out_dim(from config), gamma(for GL=0.0001), learning_dim=128 and num_layers=2 for GL)
+- a graph learning layer(GraphLearningLayer class) is set using in_dim, gamma, learning_dim
+- 2 GCN layers (GCNLayer class) accepting current in_dim (in_dim_0=in_dim) and out_dim are set into a module list
+
+forward:
+- accepts tensor x which are the nodes embeddings from encoder shape: (B*N, D), relation embeddings with shape (B, N, N, 6), default adajcecny matrix shape  (B, N, N)
+- does a Linear transformation on the relation embeddings
+- gets the adjacency matrix from the GL layer 
+- updates the default adjacency matrix by multiplying it with the result from the GL layer
+- performs transformations on x by passing through GCN layers where the adjacecny matrix is passed (standard graph convolution with propagation)
+- returns the transformed x, the soft adjacency matrix and the graph learning loss (later used in decoder)
+
+* Both the GCN layer class and the GL layer class are implemented here all according to paper
+
+6.3 Decoder
+
+constructor: 
+accepts arguments for parameters for bilstm layer, union layer and rcf layer (main modules)
+
+forward:
+- accepts tensor x which are the nodes embeddings from encoder (B,N,T,D)
+- accepts tensor x_gcn which are the transfored node embeddings from glcn layer (B,N,D)
+- accepts lenght tensor for length of each segment of the documents (B,N)
+- passes x from GL layer and x from encoding through a union layer and gets new x
+- gets logits from bilstm layer using new x
+- for training logits are passed through a crf layer to generate log_likelihood
+- returns the logits and log_likelihood
+
+* Provides implementation for Union layer, mlp layer(used in bilstm), bilstm layer. 
+
+* IMPLEMETNATION FOR CRF LAYER AND RESNET IN SEPARATE FILEs
+
+6.4 PICK final
+
+constructor: 
+accepts embedding, encoder, decoder, graph learning args and creates a model using the make_model func where the parameters are used :
+- sets embedding layer for word embeddings (no pretrained)
+- creates encoder object(layer)
+- creates graph layer(GLCN layer)
+- creates decoder layer
+
+forward:
+- embeds text using word embeddings(no pretrained)
+- passes images , box coordinates, transcripts to encoder and gets node embeddings
+- passes node embeddings, relation features(from args) and an inital adj matrix(diagonal) to graph layer and gets transformed x and soft adj amtrix and gl loss
+- passes new x and matrix to decoder and gets logits and log likelihood(crf loss)
+- returns the logits as output
+
+
+* useful files: test.py in tests used for testing all kidns of things(datasets, models, shapes etc..) ; logger.py in logger where you can set logging configuration; configuration for visualization in visualization.py in logger; examples->DocBank provides  files for pipeline training on example dataset(DocBank dataset); might be useful
+
+* Data folder contains data examples and structure requirments of each type of data for the model

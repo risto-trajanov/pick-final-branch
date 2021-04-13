@@ -1,0 +1,28 @@
+# python -m torch.distributed.launch --nnodes=1 --node_rank=0 --nproc_per_node=4 --master_addr=127.0.0.1 --master_port=5555 train.py -c config.json -d 1,2,3,4 --local_world_size 4
+
+
+
+
+# Run
+set CUDA_LAUNCH_BLOCKING=1
+python -Xutf8 train.py --dist false -c configvzd.json
+python -Xutf8 train.py --dist false -c configvzd.json --ckpt saved\models\PICK_Default\test_1014_130310\checkpoint-epoch59.pth
+
+#python -Xutf8 test.py -c configvzd.json -g 0 -output temp/vzd2 -ckpt saved\models\PICK_Default\test_1014_130310\checkpoint-epoch59.pth --bt data\vzd2\root\boxes_and_transcripts --impt data\vzd2\root\images
+#python -Xutf8 test.py -c configvzd.json -g 0 -output temp/vzd2 -ckpt saved\models\PICK_Default\test_1014_130310\checkpoint-epoch59.pth --bt data\vzd2\root\boxes_and_transcripts2 --impt data\vzd2\root\images --bs 2
+
+
+TRAINING :
+# python -Xutf8 train.py --dist false -c configvzd.json
+
+TESTING (change set):
+
+# python -Xutf8 test.py -c configvzd.json -g 0 -output out/res -ckpt saved\models\PICK_Default\test_1221_121335\model_best.pth --
+  bt ..\PICK-data\interns_data\gcn-input-processed\Train\boxes_and_transcripts --impt ..\PICK-data\interns_data\gcn-input-processe
+  d\Train\images
+
+# ON REMOTE train
+python -m torch.distributed.launch --nnode=1 --node_rank=0 --nproc_per_node=1 train.py -c config.json -d 0 --local_world_size 1
+
+# ON REMOTE test
+python test.py -ckpt saved/models/PICK_Default/test_0112_132255/model_best.pth --bt /home/nca/moio-gcnn/gcn-input-processed/Valid/boxes_and_transcripts --impt /home/nca/moio-gcnn/gcn-input-processed/Valid/images --bs 1 -g 0 -output /home/nca/moio-gcnn/valid_res_40

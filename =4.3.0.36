@@ -1,0 +1,2 @@
+Requirement already satisfied: opencv_python in /home/nca/anaconda3/envs/picnenv36/lib/python3.6/site-packages (4.5.1.48)
+Requirement already satisfied: numpy>=1.13.3 in /home/nca/anaconda3/envs/picnenv36/lib/python3.6/site-packages (from opencv_python) (1.19.5)
